@@ -51,6 +51,7 @@ func main() {
 }
 
 type Server struct {
+	BaseURL string
 	RedisCache *cache.Cache
 }
 
@@ -108,6 +109,27 @@ func (s *Server) renderTemplate(w http.ResponseWriter,
 	}
 }
 
+func (s *Server) renderMessage(
+	W HTTP.ResponseWriter,
+	R *HTTP.Request,
+	title string,
+	paragraphs ...interface{},
+)  {
+	s.renderTemplate(
+		w, r,
+		struct{
+			Title string
+			Paragraphs []interface{}
+		}{
+			Title: title,
+			Paragraphs: paragraphs,
+		},
+		"layout",
+		"dist/layout.html",
+		"dist/message.html",
+	)
+}
+
 func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 	mediaType := r.Header.Get("Content-Type")
 	if mediaType != "application/x-www-form-urlencoded" {
@@ -157,7 +179,15 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	noteURL := fmt.Sprintf("%s/%s", s.BaseURL, key)
 	w.WriteHeader(http.StatusOK)
+	s.renderMessage(
+		w, r,
+		"Note was successfully created",
+		template.HTML(
+			fmt.Sprintf("<a href='%s'>%s</a>", noteURL, noteURL)
+		)
+	)
 	w.Write([]byte("You posted to /."))
 }
 
