@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"html/template"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -22,6 +21,11 @@ func main() {
 	}
 	addr := ":" + port
 
+	baseURL := os.Getenv("BASE_URL")
+	if len(baseURL) == 0 {
+		baseURL = fmt.Sprintf("http://localhost:%s", port)
+	}
+
 	redisURL := os.Getenv("REDIS_URL")
 	if len(redisURL) == 0 {
 		redisURL = "redis://:@localhost:6379/1"
@@ -38,6 +42,7 @@ func main() {
 		Redis: redisClient,
 	})
 	server := &Server{
+		BaseURL:    baseURL,
 		RedisCache: redisCache,
 	}
 
@@ -51,8 +56,13 @@ func main() {
 }
 
 type Server struct {
-	BaseURL string
+	BaseURL    string
 	RedisCache *cache.Cache
+}
+
+// ServeHTTP implements http.Handler
+func (*Server) ServeHTTP(http.ResponseWriter, *http.Request) {
+	panic("unimplemented")
 }
 
 type Note struct {
@@ -60,7 +70,7 @@ type Note struct {
 	Destruct bool
 }
 
-func (s *Server) ServerHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) Serverhttp(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" || r.Method == "HEAD" {
 		s.handleGET(w, r)
 		return
@@ -88,14 +98,13 @@ func (s *Server) badRequest(
 	w.Write([]byte(message))
 }
 
-func (s *Server)  serverError(
+func (s *Server) serverError(
 	w http.ResponseWriter,
 	r *http.Request,
-){
+) {
 	w.WriteHeader(http.StatusInternalServerError)
 	w.Write([]byte("Ops something went wrong. Please check the server logs."))
 }
-	
 
 func (s *Server) renderTemplate(w http.ResponseWriter,
 	r *http.Request,
@@ -110,18 +119,18 @@ func (s *Server) renderTemplate(w http.ResponseWriter,
 }
 
 func (s *Server) renderMessage(
-	W HTTP.ResponseWriter,
-	R *HTTP.Request,
+	w http.ResponseWriter,
+	r *http.Request,
 	title string,
 	paragraphs ...interface{},
-)  {
+) {
 	s.renderTemplate(
 		w, r,
-		struct{
-			Title string
+		struct {
+			Title      string
 			Paragraphs []interface{}
 		}{
-			Title: title,
+			Title:      title,
 			Paragraphs: paragraphs,
 		},
 		"layout",
@@ -164,15 +173,14 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := uuid.NewString()
-	err = s.RedisCache.Get(
+	err = s.RedisCache.Set(
 		&cache.Item{
-			Ctx: r.Context(),
-			Key: key,
-			Value: note,
-			TTL: ttl,
+			Ctx:            r.Context(),
+			Key:            key,
+			Value:          note,
+			TTL:            ttl,
 			SkipLocalCache: true,
-		}
-)
+		})
 	if err != nil {
 		fmt.Println(err)
 		s.serverError(w, r)
@@ -185,17 +193,14 @@ func (s *Server) handlePOST(w http.ResponseWriter, r *http.Request) {
 		w, r,
 		"Note was successfully created",
 		template.HTML(
-			fmt.Sprintf("<a href='%s'>%s</a>", noteURL, noteURL)
-		)
-	)
-	w.Write([]byte("You posted to /."))
+			fmt.Sprintf("<a href='%s'>%s</a>", noteURL, noteURL)))
 }
 
 func (s *Server) handleGET(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
-	log.Printf(path)
 	if path == "/" {
-		s.renderTemplate(w, r, nil,
+		s.renderTemplate(
+			w, r, nil,
 			"layout",
 			"dist/layout.html",
 			"dist/index.html")
@@ -205,6 +210,23 @@ func (s *Server) handleGET(w http.ResponseWriter, r *http.Request) {
 	noteID := strings.TrimPrefix(path, "/")
 	ctx := r.Context()
 	note := &Note{}
+	err := s.RedisCache.GetSkippingLocalCache(ctx, noteID, note)
+	if err != nil {
+		s.badRequest(
+			w, r,
+			http.StatusNotFound,
+			fmt.Sprintf("Npte with ID %s does not exist.", noteID))
+		return
+	}
+
+	if note.Destruct {
+		err := s.RedisCache.Delete(ctx, noteID)
+		if err != nil {
+			fmt.Println(err)
+			s.serverError(w, r)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(note.Data)
